@@ -62,18 +62,12 @@ instance Show Case where
     show VIDE = " "
 
 -- Environnement du jeu
-enviex1 :: Envi
-enviex1 = Envi
-            (Ecran 30 60)
-            (Joueuse (C 15 2) 3)
-            [Caillou(C 15 15),Caillou(C 14 15),Caillou(C 10 12)]
-            EnCours
 
 toucheObs :: Coord -> Obstacle -> Bool
 toucheObs (C x y)(Caillou(C x' y')) = (x==x' && y==y')
 
 contenu :: Coord -> Envi -> Case
-contenu co (Envi ecran jou obs st) | jCoord jou == co = JOU
+contenu co (Envi ecran jou obs st _) | jCoord jou == co = JOU
                                    | ilExiste (\o -> toucheObs co o) obs = OBS
                                    | otherwise = VIDE
 
@@ -131,16 +125,16 @@ data Direction = H | B | G | D | N
 -- Joueuse
 
 depJ :: Char -> EtatJeu ()
-depJ 'z' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st )-> ((Envi ecr (Joueuse (C x (y+1)) pv )obs st),()))
+depJ 'z' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x (y+1)) pv )obs st gen ),()))
 
-depJ 's' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st )-> ((Envi ecr (Joueuse (C x (y-1)) pv )obs st),()))
-depJ 'q' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st )-> ((Envi ecr (Joueuse (C (x-1) y) pv )obs st),()))
-depJ 'd' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st )-> ((Envi ecr (Joueuse (C (x+1) y) pv )obs st),()))
-depJ _ = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st )-> ((Envi ecr (Joueuse (C x y) pv )obs st),()))
+depJ 's' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x (y-1)) pv )obs st gen ),()))
+depJ 'q' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C (x-1) y) pv )obs st gen ),()))
+depJ 'd' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C (x+1) y) pv )obs st gen ),()))
+depJ _ = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x y) pv )obs st gen),()))
 
 checkPerdu :: EtatJeu()
-checkPerdu = Etat(\(Envi ecr (Joueuse c pv ) obs st) -> (if pv <=0 then (Envi ecr (Joueuse c pv) obs Perdu )
-                                                                    else (Envi ecr (Joueuse c pv) obs st)
+checkPerdu = Etat(\(Envi ecr (Joueuse c pv ) obs st gen) -> (if pv <=0 then (Envi ecr (Joueuse c pv) obs Perdu gen)
+                                                                    else (Envi ecr (Joueuse c pv) obs st gen)
                                                         ,()))
 
 --  perte de PV
@@ -148,21 +142,21 @@ pertePVJo :: Joueuse ->Joueuse
 pertePVJo ( Joueuse co pv ) = Joueuse co (pv-1)
 
 obsPVJo :: Envi -> Integer
-obsPVJo (Envi _ (Joueuse _ pv) _ _ ) = pv
+obsPVJo (Envi _ (Joueuse _ pv) _ _ _ ) = pv
 
 
 obsPVEnv :: EtatJeu Integer
-obsPVEnv = Etat(\(Envi ecr (Joueuse c pv) obs st) -> ((Envi ecr (Joueuse c pv) obs st),pv))
+obsPVEnv = Etat(\(Envi ecr (Joueuse c pv) obs st gen) -> ((Envi ecr (Joueuse c pv) obs st gen),pv))
 
 obsSt :: EtatJeu Statut
-obsSt = Etat(\(Envi ecr jo obs st) -> ((Envi ecr jo obs st),st))
+obsSt = Etat(\(Envi ecr jo obs st gen) -> ((Envi ecr jo obs st gen ),st))
 
 affiche ::EtatJeu String 
 affiche = Etat (\env -> (env,show env))
 
 pertePVEnv :: Envi -> Envi
-pertePVEnv(Envi ecr jo obs st) | obsPVJo (Envi ecr jo obs st ) >1 = Envi ecr (pertePVJo jo) obs st
-                               | otherwise = Envi ecr (pertePVJo jo) obs Perdu
+pertePVEnv(Envi ecr jo obs st gen) | obsPVJo (Envi ecr jo obs st gen ) >1 = Envi ecr (pertePVJo jo) obs st gen
+                               | otherwise = Envi ecr (pertePVJo jo) obs Perdu gen
 pertePV :: EtatJeu()
 pertePV = Etat(\env -> (pertePVEnv env,()))
 
@@ -208,19 +202,27 @@ descendUn :: Obstacle -> Obstacle
 descendUn  (Caillou(C x y )) = Caillou (C x (y-1))
 
 scrollEnv :: Envi -> Envi
-scrollEnv (Envi ecr (Joueuse c pv ) obs st ) | (ilExiste (toucheObs c ) obs )=Envi ecr (Joueuse c (pv-1)) (fmap descendUn obs) st
-                                             | otherwise = Envi ecr (Joueuse c pv) (fmap descendUn obs) st
+scrollEnv (Envi ecr (Joueuse c pv ) obs st gen ) | (ilExiste (toucheObs c ) obs )=Envi ecr (Joueuse c (pv-1)) (fmap descendUn obs) st gen
+                                             | otherwise = Envi ecr (Joueuse c pv) (fmap descendUn obs) st gen
 
+cleanObs :: Envi -> Envi
+cleanObs env =
+    let h = ecrHt (envEcr env)
+        obs' = filter (\(Caillou (C _ y)) -> y >= 0 && y <= h) (envObs env)
+    in env { envObs = obs' }
 
 scroll :: EtatJeu ()
-scroll = Etat(\env -> ((scrollEnv env),()))
+scroll = Etat(\env ->
+    let env' = scrollEnv env
+    in (env',()))
 
 
 tour :: Char -> EtatJeu String
 tour c = do 
             depJ c
             scroll
-            checkPerdu 
+            checkPerdu
+            spawnObs 3
             affiche
 
 
@@ -238,10 +240,14 @@ randomList n = Etat ( \env ->
     let gen = envGen env
         (vals, gen') = genList n gen (ecrLg (envEcr env))
 
-    in (env { envGen = gen' }, vals)
-)
+    in (env { envGen = gen' }, vals))
 
-
+spawnObs :: Integer -> EtatJeu ()
+spawnObs n = Etat (\env ->
+    let (xs, gen') = genList n (envGen env) (ecrLg (envEcr env))
+        topY = ecrHt (envEcr env)
+        newObs = map (\x -> Caillou (C x topY)) xs
+    in (env { envObs = newObs ++ envObs env, envGen = gen' }, ()))
 
 -- getChar :: IO getChar
 -- putStrLn :: String-> IO()
@@ -263,6 +269,13 @@ boucle env = do
                 boucle env'
 
 main :: IO()
-main = do   putStrLn "Début de jeu"
-            putStrLn (applique enviex1 affiche)
-            boucle enviex1
+main = do
+    gen <- getStdGen   -- 从 IO 里取出 StdGen
+    let env0 = Envi
+            (Ecran 30 60)
+            (Joueuse (C 15 2) 3)
+            []
+            EnCours
+            gen
+    putStrLn (applique env0 affiche)
+    boucle env0
