@@ -1,4 +1,10 @@
-import System.Random (StdGen, randomR,getStdGen)
+import System.Random (StdGen, randomR, getStdGen)
+import Graphics.Gloss
+import Graphics.Gloss.Interface.Pure.Game
+
+-- ==========================================
+-- FONCTIONS UTILITAIRES DE BASE
+-- ==========================================
 
 somme :: [Integer] -> Integer 
 somme [] = 0
@@ -20,10 +26,9 @@ zeros :: Integer -> [Integer]
 zeros 0 = []
 zeros n = [0] ++ (zeros (n-1))
 
-
-
-
--- des types du jeu 
+-- ==========================================
+-- TYPES DU JEU (Modèle de données)
+-- ==========================================
 
 data Ecran = Ecran {
                     ecrHt :: Integer,
@@ -50,7 +55,8 @@ data Envi = Envi {
                   envJou :: Joueuse,
                   envObs :: [Obstacle],
                   envst :: Statut,
-                  envGen :: StdGen
+                  envGen :: StdGen,
+                  envScore :: Integer  -- NOUVEAU: Le score du joueur
                  }
 
 data Case= OBS | JOU | VIDE
@@ -61,40 +67,36 @@ instance Show Case where
     show JOU = "^"
     show VIDE = " "
 
--- Environnement du jeu
-
 toucheObs :: Coord -> Obstacle -> Bool
 toucheObs (C x y)(Caillou(C x' y')) = (x==x' && y==y')
 
 contenu :: Coord -> Envi -> Case
-contenu co (Envi ecran jou obs st _) | jCoord jou == co = JOU
-                                   | ilExiste (\o -> toucheObs co o) obs = OBS
-                                   | otherwise = VIDE
+contenu co (Envi ecran jou obs st _ _) | jCoord jou == co = JOU
+                                       | ilExiste (\o -> toucheObs co o) obs = OBS
+                                       | otherwise = VIDE
 
 instance Show Envi where
    show env | envst env /= Perdu =   foldr (\y acc -> foldr (ligne env y)("\n"<> acc)(depZer (ecrLg(envEcr env))))
                                      "\n"
                                      (jsqZer(ecrHt(envEcr env)))
-                                     <> "PV: "<> show (jPv (envJou env)) <> "\n"     --syntaxe inversée ?
+                                     <> "PV: "<> show (jPv (envJou env)) <> " | Score: " <> show (envScore env) <> "\n"     
             |otherwise = "Perdu !!! "
              where ligne env y x acc = show (contenu (C x y) env) <> acc 
 
--- Monade d'Etat
+-- ==========================================
+-- MONADE D'ETAT
+-- ==========================================
 
 data Etat s a = Etat (s -> (s,a))
 
 instance Functor (Etat s) where
-    -- fmap :: (a -> b) -> Etat s a -> Etat s b
     fmap f (Etat p1) = Etat (\x ->
         let (x', y) = p1 x
         in (x', f y)
       )
 
 instance Applicative (Etat s) where
-    -- pure :: a -> Etat s a
     pure y = Etat (\x -> (x, y))
-
-    -- (<*>) :: Etat s (a -> b) -> Etat s a -> Etat s b
     (<*>) (Etat pf) (Etat py) = Etat (\x ->
         let (x', f)  = pf x
             (x'', y) = py x'
@@ -102,13 +104,11 @@ instance Applicative (Etat s) where
       )
 
 instance Monad (Etat s) where
-    -- (>>=) :: Etat s a -> (a -> Etat s b) -> Etat s b
     (>>=) (Etat p1) f = Etat (\x ->
         let (x', y) = p1 x in 
         let (Etat p2) = f y
         in p2 x'
       )
-
 
 type EtatJeu = Etat Envi
 
@@ -118,92 +118,49 @@ get = Etat (\s -> (s, s))
 put :: s -> Etat s ()
 put s = Etat (\_ -> (s, ()))
 
-data Direction = H | B | G | D | N 
-    deriving Eq
-
-
--- Joueuse
+-- ==========================================
+-- ACTIONS PURES (Logique de jeu)
+-- ==========================================
 
 depJ :: Char -> EtatJeu ()
-depJ 'z' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x (y+1)) pv )obs st gen ),()))
-
-depJ 's' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x (y-1)) pv )obs st gen ),()))
-depJ 'q' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C (x-1) y) pv )obs st gen ),()))
-depJ 'd' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C (x+1) y) pv )obs st gen ),()))
-depJ _ = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen )-> ((Envi ecr (Joueuse (C x y) pv )obs st gen),()))
+depJ 'z' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen sc)-> ((Envi ecr (Joueuse (C x (y+1)) pv )obs st gen sc),()))
+depJ 's' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen sc)-> ((Envi ecr (Joueuse (C x (y-1)) pv )obs st gen sc),()))
+depJ 'q' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen sc)-> ((Envi ecr (Joueuse (C (x-1) y) pv )obs st gen sc),()))
+depJ 'd' = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen sc)-> ((Envi ecr (Joueuse (C (x+1) y) pv )obs st gen sc),()))
+depJ _   = Etat(\(Envi ecr (Joueuse (C x y) pv) obs st gen sc)-> ((Envi ecr (Joueuse (C x y) pv )obs st gen sc),()))
 
 checkPerdu :: EtatJeu()
-checkPerdu = Etat(\(Envi ecr (Joueuse c pv ) obs st gen) -> (if pv <=0 then (Envi ecr (Joueuse c pv) obs Perdu gen)
-                                                                    else (Envi ecr (Joueuse c pv) obs st gen)
-                                                        ,()))
+checkPerdu = Etat(\(Envi ecr (Joueuse c pv ) obs st gen sc) -> 
+    (if pv <= 0 then (Envi ecr (Joueuse c pv) obs Perdu gen sc)
+                else (Envi ecr (Joueuse c pv) obs st gen sc), ()))
 
---  perte de PV
-pertePVJo :: Joueuse ->Joueuse 
+pertePVJo :: Joueuse -> Joueuse 
 pertePVJo ( Joueuse co pv ) = Joueuse co (pv-1)
 
 obsPVJo :: Envi -> Integer
-obsPVJo (Envi _ (Joueuse _ pv) _ _ _ ) = pv
-
+obsPVJo (Envi _ (Joueuse _ pv) _ _ _ _) = pv
 
 obsPVEnv :: EtatJeu Integer
-obsPVEnv = Etat(\(Envi ecr (Joueuse c pv) obs st gen) -> ((Envi ecr (Joueuse c pv) obs st gen),pv))
+obsPVEnv = Etat(\(Envi ecr (Joueuse c pv) obs st gen sc) -> ((Envi ecr (Joueuse c pv) obs st gen sc),pv))
 
 obsSt :: EtatJeu Statut
-obsSt = Etat(\(Envi ecr jo obs st gen) -> ((Envi ecr jo obs st gen ),st))
-
-affiche ::EtatJeu String 
-affiche = Etat (\env -> (env,show env))
+obsSt = Etat(\(Envi ecr jo obs st gen sc) -> ((Envi ecr jo obs st gen sc),st))
 
 pertePVEnv :: Envi -> Envi
-pertePVEnv(Envi ecr jo obs st gen) | obsPVJo (Envi ecr jo obs st gen ) >1 = Envi ecr (pertePVJo jo) obs st gen
-                               | otherwise = Envi ecr (pertePVJo jo) obs Perdu gen
+pertePVEnv(Envi ecr jo obs st gen sc) 
+    | obsPVJo (Envi ecr jo obs st gen sc) > 1 = Envi ecr (pertePVJo jo) obs st gen sc
+    | otherwise = Envi ecr (pertePVJo jo) obs Perdu gen sc
+
 pertePV :: EtatJeu()
 pertePV = Etat(\env -> (pertePVEnv env,()))
 
-script1 :: EtatJeu Statut
-script1 = do 
-            pertePV
-            pertePV
-            pertePV
-            obsSt
-
-script2 :: EtatJeu Integer
-script2 = do 
-            pertePV
-            pertePV
-            obsPVEnv
-
-script3 :: EtatJeu[(Integer,Statut)]
-script3 = do 
-            pv1 <- script2 
-            st1 <- obsSt
-            pv2 <- script2 
-            st2 <- obsSt
-            pv3 <- script2 
-            st3 <- obsSt
-            return [(pv1,st1) , (pv2,st2) , (pv3,st3)]                                         --return permet d'avoir à la fin un type de EtatJeu() au lieu de juste [(Integer,Statut)]
-
-script4 :: EtatJeu(String)
-script4 = do 
-            scroll 
-            scroll 
-            scroll 
-            scroll 
-            affiche
-
-
-applique :: Envi -> EtatJeu a -> a 
-applique env (Etat p) = let (_ ,res) = p env in res
-
-
-
---scrolling 
 descendUn :: Obstacle -> Obstacle 
-descendUn  (Caillou(C x y )) = Caillou (C x (y-1))
+descendUn (Caillou(C x y)) = Caillou (C x (y-1))
 
 scrollEnv :: Envi -> Envi
-scrollEnv (Envi ecr (Joueuse c pv ) obs st gen ) | (ilExiste (toucheObs c ) obs )=Envi ecr (Joueuse c (pv-1)) (fmap descendUn obs) st gen
-                                             | otherwise = Envi ecr (Joueuse c pv) (fmap descendUn obs) st gen
+scrollEnv (Envi ecr (Joueuse c pv) obs st gen sc) 
+    | ilExiste (toucheObs c) obs = Envi ecr (Joueuse c (pv-1)) (fmap descendUn obs) st gen sc
+    | otherwise = Envi ecr (Joueuse c pv) (fmap descendUn obs) st gen sc
 
 cleanObs :: Envi -> Envi
 cleanObs env =
@@ -212,21 +169,7 @@ cleanObs env =
     in env { envObs = obs' }
 
 scroll :: EtatJeu ()
-scroll = Etat(\env ->
-    let env' = scrollEnv env
-    in (env',()))
-
-
-tour :: Char -> EtatJeu String
-tour c = do 
-            depJ c
-            scroll
-            checkPerdu
-            spawnObs 3
-            affiche
-
-
--- partie aléatoire 
+scroll = Etat(\env -> (scrollEnv env, ()))
 
 genList :: Integer -> StdGen -> Integer -> ([Integer], StdGen)              
 genList 0 gen _ = ([], gen)
@@ -235,13 +178,6 @@ genList n gen maxX =
         (rest, gen2) = genList (n-1) gen1 maxX
     in (v : rest, gen2)
 
-randomList :: Integer -> EtatJeu [Integer]
-randomList n = Etat ( \env ->
-    let gen = envGen env
-        (vals, gen') = genList n gen (ecrLg (envEcr env))
-
-    in (env { envGen = gen' }, vals))
-
 spawnObs :: Integer -> EtatJeu ()
 spawnObs n = Etat (\env ->
     let (xs, gen') = genList n (envGen env) (ecrLg (envEcr env))
@@ -249,33 +185,83 @@ spawnObs n = Etat (\env ->
         newObs = map (\x -> Caillou (C x topY)) xs
     in (env { envObs = newObs ++ envObs env, envGen = gen' }, ()))
 
--- getChar :: IO getChar
--- putStrLn :: String-> IO()
-
--- ***   PARTIE IMPURE   ***
-
-faitTour :: Char-> Envi -> IO Envi
-faitTour c env = let Etat p = (tour c) in 
-                 let (env',str) = p env in 
-                 do 
-                    putStrLn str
-                    return env'
+gainScore :: EtatJeu ()
+gainScore = Etat (\env -> (env { envScore = envScore env + 1 }, ()))
 
 
-boucle :: Envi ->IO()
-boucle env = do 
-                c <- getChar
-                env' <- faitTour c env
-                boucle env'
+-- ==========================================
+-- *** PARTIE GLOSS (Temps réel et Graphismes) ***
+-- ==========================================
 
-main :: IO()
+-- 1. Utilitaire pour déballer la monade Etat
+execEtat :: Etat s a -> s -> s
+execEtat (Etat p) env = let (env', _) = p env in env'
+
+tailleCase :: Float
+tailleCase = 20.0
+
+-- 2. La Vue : dessiner l'environnement
+dessiner :: Envi -> Picture
+dessiner env 
+    | envst env == Perdu = pictures [
+        translate (-150) 0 $ scale 0.5 0.5 $ color red $ text "PERDU !!!",
+        translate (-100) (-100) $ scale 0.2 0.2 $ color white $ text ("Score Final : " ++ show (envScore env))
+      ]
+    | otherwise = pictures [
+        dessinerJoueur (envJou env), 
+        dessinerObstacles (envObs env),
+        dessinerUI env
+      ]
+
+dessinerJoueur :: Joueuse -> Picture
+dessinerJoueur (Joueuse (C x y) _) = 
+    translate (fromIntegral x * tailleCase - 400) (fromIntegral y * tailleCase - 300) $ 
+    color cyan $ polygon [(-10, -10), (10, -10), (0, 15)]
+
+dessinerObstacles :: [Obstacle] -> Picture
+dessinerObstacles obs = pictures (map dessinerUn obs)
+  where 
+    dessinerUn (Caillou (C x y)) = 
+        translate (fromIntegral x * tailleCase - 400) (fromIntegral y * tailleCase - 300) $ 
+        color orange $ circleSolid 10
+
+dessinerUI :: Envi -> Picture
+dessinerUI env = pictures [
+    translate (-350) (-250) $ scale 0.15 0.15 $ color white $ text ("PV: " ++ show (jPv (envJou env))),
+    translate 150 (-250) $ scale 0.15 0.15 $ color yellow $ text ("SCORE: " ++ show (envScore env))
+  ]
+
+-- 3. Les Entrées : réagir au clavier
+gererEntrees :: Event -> Envi -> Envi
+gererEntrees (EventKey (Char k) Down _ _) env 
+    | k `elem` ['z', 'q', 's', 'd'] = execEtat (depJ k) env
+gererEntrees _ env = env
+
+-- 4. Le Moteur : mettre à jour le jeu à chaque "frame"
+mettreAJour :: Float -> Envi -> Envi
+mettreAJour _ env 
+    | envst env == Perdu = env
+    | otherwise = execEtat tourContinu env
+  where
+    tourContinu = do
+        scroll
+        checkPerdu
+        spawnObs 1 
+        gainScore
+        Etat (\e -> (cleanObs e, ()))
+
+-- 5. Le lancement
+main :: IO ()
 main = do
-    gen <- getStdGen   -- 从 IO 里取出 StdGen
+    putStrLn "Lancement du Shoot'em Up graphique avec Score..."
+    gen <- getStdGen   
     let env0 = Envi
             (Ecran 30 60)
             (Joueuse (C 15 2) 3)
             []
             EnCours
             gen
-    putStrLn (applique env0 affiche)
-    boucle env0
+            0  -- Score de départ
+            
+    let fenetre = InWindow "PCOMP 2026 : Shoot'em Up" (800, 600) (100, 100)
+    play fenetre black 5 env0 dessiner gererEntrees mettreAJour
